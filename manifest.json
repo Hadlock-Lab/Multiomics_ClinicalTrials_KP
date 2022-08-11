@@ -3,10 +3,13 @@
     "version": "0.1",
     "__metadata__": {
         "url": "https://aact.ctti-clinicaltrials.org/",
+        "license_url": "https://github.com/ctti-clinicaltrials/aact/blob/dev/LICENSE",
+        "license": "MIT",
+        "description": "ClinicalTrials.gov contains information about observational and interventional studies applied to subjects according to a research protocol. Currently, we support querying for interventions/treatments trialed for subjects with conditions/diseases. Results indicate relevant studies identifiable by NCT_ID (unique ID of the study). Acknowledgement: Clinical Trials Transformation Initiative (https://ctti-clinicaltrials.org/)"
     },
     "dumper": {
-        "data_url": ["https://aact.ctti-clinicaltrials.org/static/exported_files/daily/20220223_pipe-delimited-export.zip"],
-        "uncompress": true,
+        "data_url": ["http://localhost:8080/dataupload/mysrc/ClinTrials_KG_edges_v01_3.csv"],
+        "uncompress": false
     },
     "uploader" : {
         "parser": "ClinTrials_parser_v01:parse_edges",

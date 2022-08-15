@@ -8,7 +8,7 @@ This KP is in the initial development phase and currently supports 1-hop queryin
 
 ### Graph Representation
 
-![graph image](clinicaltrials_graph.pdf)
+![graph image](clinicaltrials_graph.jpg)
 
 
 

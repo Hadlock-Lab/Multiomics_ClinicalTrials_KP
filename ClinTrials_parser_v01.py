@@ -51,4 +51,3 @@ def parse_edges(data_folder):
         # print(json.dumps(id_dict, indent=2))
 
 
-parse_edges()

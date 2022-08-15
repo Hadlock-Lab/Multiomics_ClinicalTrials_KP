@@ -11,7 +11,7 @@ def parse_edges(data_folder):
     filepath = os.path.join(data_folder, filename)
 
     edges = pd.read_csv(filepath, sep='\t')
-    for index, row in edges[:5].iterrows():
+    for index, row in edges.iterrows():
         id_dict = {}
         subject_dict = {}
         association_dict = {}

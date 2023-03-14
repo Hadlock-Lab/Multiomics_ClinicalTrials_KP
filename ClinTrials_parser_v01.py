@@ -33,7 +33,7 @@ def parse_edges(data_folder):
         # association_dict["edge_attributes"].append({"attribute_type_id": "biolink:original_subject", "value": "movement disorders"})  # input original queried subject string instead of "movement disorders"
         # association_dict["edge_attributes"].append({"attribute_type_id": "biolink:original_object", "value": "physical activity"})   # input original queried object string instead of "physical activity"
         association_dict["edge_attributes"].append({"attribute_type_id":"biolink:original_knowledge_source", "value":"infores:biothings-multiomics-clinicaltrials"})
-        association_dict["edge_attributes"].append({"attribute_type_id": "biolink:original_knowledge_source", "value": "infores:aact"})
+        association_dict["edge_attributes"].append({"attribute_type_id": "biolink:primary_knowledge_source", "value": "infores:aact"})
 
 
         object_dict["{}".format(row["object"].split(':')[0])] = "{}".format(row["object"].split(':')[1])
@@ -45,9 +45,11 @@ def parse_edges(data_folder):
         id_dict["association"] = association_dict
         id_dict["object"] = object_dict 
 
+        # print(json.dumps(id_dict, indent=2))
+
         # yield the JSON one by one
         yield id_dict
 
-        # print(json.dumps(id_dict, indent=2))
-
+# data_folder = "./outputs" # uncomment for testing
+# parse_edges(data_folder) # uncomment for testings
 

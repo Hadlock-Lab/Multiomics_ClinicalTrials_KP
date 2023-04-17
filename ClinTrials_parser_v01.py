@@ -9,6 +9,8 @@ import json
 def parse_edges(data_folder):
     filename = "ClinTrials_KG_edges_v01_3.csv"
     filepath = os.path.join(data_folder, filename)
+    attribute_source = "infores:biothings-multiomics-clinicaltrials"
+    attribute_data_source = "infores:aact"
 
     edges = pd.read_csv(filepath, sep='\t')
     for index, row in edges.iterrows():
@@ -35,7 +37,7 @@ def parse_edges(data_folder):
         association_dict["edge_attributes"].append({"attribute_type_id":"biolink:biolink:aggregator_knowledge_source", "value":"infores:biothings-multiomics-clinicaltrials"})
         association_dict["edge_attributes"].append({"attribute_type_id": "biolink:primary_knowledge_source", "value": "infores:aact"})
 
-
+        sources_dict["
         object_dict["{}".format(row["object"].split(':')[0])] = "{}".format(row["object"].split(':')[1])
         object_dict["name"] = row["object_name"]
         object_dict["type"] = "Treatment"
@@ -43,7 +45,17 @@ def parse_edges(data_folder):
 
         id_dict["subject"] = subject_dict
         id_dict["association"] = association_dict
-        id_dict["object"] = object_dict 
+        id_dict["object"] = object_dict
+        id_dict["edge_sources"] = [
+            {
+                "resource_id": attribute_source,
+                "resource_role": "primary_knowledge_source"
+            },
+            {
+                "resource_id": attribute_data_source,
+                "resource_role": "supporting_data_source"
+            }
+        ]
 
         # print(json.dumps(id_dict, indent=2)) # uncomment for testing
 

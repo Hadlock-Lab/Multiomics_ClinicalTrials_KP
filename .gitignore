@@ -1,0 +1,9 @@
+environment_ETL_Python_manual.yml
+data/
+outputs/
+config.py
+protected/
+protected_copy/
+.ipynb_checkpoints
+/scripts/.ipynb_checkpoints
+data/.DS_Store outputs/.DS_Store scripts/.DS_Store

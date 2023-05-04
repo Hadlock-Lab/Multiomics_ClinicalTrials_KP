@@ -1,0 +1,4 @@
+Packages to exclude in environment yml file
+
+ResolvePackageNotFound: 
+  - libcxx=12.0.0

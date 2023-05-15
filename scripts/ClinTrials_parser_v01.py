@@ -47,7 +47,7 @@ def parse_edges(data_folder):
 
         object_dict["{}".format(row["object"].split(':')[0])] = "{}".format(row["object"].split(':')[1])
         object_dict["name"] = row["object_name"]
-        object_dict["type"] = "DiseaseorPhenotypicFeature"
+        object_dict["type"] = "biolink:DiseaseorPhenotypicFeature"
         # object_dict["{}_semantic_types".format(row["object"].split(':')[0])] = "TBD" # fix in next version
 
         source_dict["edge_sources"] = []

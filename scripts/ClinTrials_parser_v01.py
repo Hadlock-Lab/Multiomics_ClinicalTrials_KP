@@ -79,7 +79,11 @@ def parse_edges(data_folder):
         # yield the JSON one by one
         yield id_dict # comment for testing
 
-# data_folder = "../outputs" # uncomment for testing
-# parse_edges(data_folder) # uncomment for testing
 
+def main():
+    data_folder = "../outputs/version_1" # uncomment for testing
+    parse_edges(data_folder) # uncomment for testing
+
+if __name__ == "__main__":
+    main()
 

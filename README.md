@@ -10,6 +10,8 @@ This KP is in the initial development phase and currently supports 1-hop queryin
 
 ![graph image](clinicaltrials_graph.jpg)
 
+Note: Multiomics KP for Clinical Trials is served via Biothings: [https://github.com/NCATSTranslator/Translator-All/wiki/BioThings-APIs](url)
+
 
 
 

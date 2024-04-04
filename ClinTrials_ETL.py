@@ -1,488 +1,649 @@
-# #!/usr/bin/env python3
-#!/usr/bin/env conda run -n ct_extract_env python
+#!/usr/bin/env python3
 
-import os
 import pandas as pd
-# shell command: brew install postgresql 
-import psycopg2
-import pandas.io.sql as sqlio
-# from config import API_KEY
-from time import sleep
-import re
-import sys
-import multiprocessing
-import pickle
-import json
-from itertools import repeat
 import requests
+import bs4
 from bs4 import BeautifulSoup
-from datetime import date
+import re
+import collections
+import os
+import json
+import numpy as np
+import pickle
+from functools import reduce
+import time
+from time import sleep
+import concurrent.futures
+import multiprocessing
 import datetime as dt
+from datetime import date
+import pathlib
+import configparser
+import sys
 import urllib
 import zipfile
-# import pathlib
-from pathlib import Path
-import random
+import csv
+import gc
+# sys.path.insert(0, '/Volumes/TOSHIBA_EXT/ISB/clinical_trials/pymetamap-master') # for local
+sys.path.insert(0, '/users/knarsinh/projects/clinical_trials/metamap/pymetamap') # for hypatia
+from pymetamap import MetaMap  # https://github.com/AnthonyMRios/pymetamap/blob/master/pymetamap/SubprocessBackend.py
+from pandas import ExcelWriter
+import ast
+import glob
+from tqdm import tqdm
+import subprocess
+import shlex
+from collections import Counter
+from ratelimit import limits, sleep_and_retry
+import threading
+from threading import Thread
+from joblib import Parallel, delayed
+csv_writer_lock = threading.Lock()
+
+# %pip install thefuzz
+# %pip install levenshtein
+# %pip install xlsxwriter
+# %pip install ratelimit
+# %pip install timeout_decorator
+
+from thefuzz import fuzz # fuzzy matching explained: https://www.datacamp.com/tutorial/fuzzy-string-python
+
+# 40 calls per minute
+CALLS = 40
+RATE_LIMIT = 60
 
 
+def get_token_sort_ratio(str1, str2):
+    """ fuzzy matching explained: https://www.datacamp.com/tutorial/fuzzy-string-python """
+    try:
+        return fuzz.token_sort_ratio(str1, str2)
+    except:
+        return None
 
-# adding Folder_2/subfolder to the system path
-# sys.path.insert(0, '/Volumes/TOSHIBA_EXT/ISB/clinical_trials/pymetamap-master')  # for running on local
-sys.path.insert(0, '/users/knarsinh/projects/clinical_trials/metamap/pymetamap')
-from pymetamap import MetaMap
-
-
-# Setup UMLS Server global vars
-# metamap_base_dir = '/Volumes/TOSHIBA_EXT/ISB/clinical_trials/public_mm/' # for running on local
-metamap_base_dir = "/users/knarsinh/projects/clinical_trials/metamap/public_mm/"
-# metamap_bin_dir = 'bin/metamap18' # uncomment for running on local
-metamap_bin_dir = 'bin/metamap20'
-metamap_pos_server_dir = 'bin/skrmedpostctl'
-metamap_wsd_server_dir = 'bin/wsdserverctl'
-
-
-#####	----	****	----	----	****	----	----	****	----    #####
-
-# ACCESSING DATA BY downloading flat files
-
-def latest_date_download():
-
-    # url = "https://aact.ctti-clinicaltrials.org/pipe_files"
-    # response = requests.get(url)
-    # soup = BeautifulSoup(response.text)
-    # upload_dates = []
-    # zip_files = []
-    # links = []
-    # body = soup.find_all('td', attrs={'class': 'file-archive'}) #Find all
-    # for el in body:
-    #     tags = el.find('a')
-    #     try:
-    #         if 'href' in tags.attrs:   # looking for href inside anchor tag    
-    #             link = "https://aact.ctti-clinicaltrials.org" + tags.get('href')
-    #             links.append(link)
-    #             last_upload = link.split("/")[-1]
-    #             zip_files.append(last_upload)
-    #             date_upload = last_upload.split("_")[0]
-    #             upload_dates.append(date_upload)    # appending link to list of links
-    #     except:    # pass if list missing anchor tag or anchor tag does not has a href params 
-    #         pass
-
-    # upload_dates = [dt.datetime.strptime(date, '%Y%m%d').date() for date in upload_dates] # convert all strings in list into datetime objects
-    # print(upload_dates)
-
-    # latest_file_date = max(upload_dates)
-    # latest_file_date = latest_file_date.strftime('%Y%m%d') 
-    # print(latest_file_date)
-
-
-    # get all the links and associated dates of upload into a dict called date_link
-    url_all = "https://aact.ctti-clinicaltrials.org/pipe_files"
-    response = requests.get(url_all)
-    soup = BeautifulSoup(response.text, features="html.parser")
-    body = soup.find_all('td', attrs={'class': 'file-archive'}) #Find all
-    date_link = {}
-    for el in body:
-        tags = el.find('a')
-        try:
-            zip_name = tags.contents[0]
-            date = zip_name.split("_")[0]
-            date = dt.datetime.strptime(date, '%Y%m%d').date()
-            date_link[date] = tags.get('href')
-        except:
-            pass
-    # get the date of the latest upload
-    latest_file_date = max(date_link.keys())
-
-    return(latest_file_date)
-
-
-# connect to DB and get the column names of the table
-
-# extract data from ClinicalTrials.gov
-def get_trial_data(latest_file_date):
+def get_similarity_score(str1, str2):
+    """ fuzzy matching explained: https://www.datacamp.com/tutorial/fuzzy-string-python """
+    try:
+        return fuzz.ratio(str1, str2)
+    except:
+        return None
     
-    # global version_date
-    # version_date = latest_file_date
-    # version.get_release(version_date)
+def convert_seconds_to_hms(seconds):
+    """ converts the elapsed time or runtime to hours, min, sec """
+    hours = seconds // 3600
+    seconds %= 3600
+    minutes = seconds // 60
+    seconds %= 60
+    return hours, minutes, seconds
 
-    url = "https://aact.ctti-clinicaltrials.org/static/exported_files/daily/{}_pipe-delimited-export.zip".format(latest_file_date)
-    data_dir = "{}/data".format(Path.cwd().parents[0])
-    data_extracted = data_dir + "/{}_extracted".format(latest_file_date)
-    data_path = Path.cwd().parents[0] / "{}/{}_pipe-delimited-export.zip".format(data_dir, latest_file_date)
-    # print(data_path)
-    if not os.path.exists(data_path):
-        req = requests.get(url)
-        with open(data_path, 'wb') as download:
-            download.write(req.content)
-        with zipfile.ZipFile(data_path, 'r') as download:
-            download.extractall(data_extracted) 
-    else:
-        print("KG is already up to date.")
-        exit()
-
-    return(data_extracted)
-
-
-def process_trial_data(data_extracted):
-    conditions_df = pd.read_csv(data_extracted + '/conditions.txt', sep='|', index_col=False, header=0)
-    interventions_df = pd.read_csv(data_extracted + '/interventions.txt', sep='|', index_col=False, header=0)
-    browse_conditions_df = pd.read_csv(data_extracted + '/browse_conditions.txt', sep='|', index_col=False, header=0)
-    browse_interventions_df = pd.read_csv(data_extracted + '/browse_interventions.txt', sep='|', index_col=False, header=0)
-
-    # rename and drop df relevant columns to prepare for merging
-    interventions_df = interventions_df.rename(columns={'id': 'int_id',
-                                                        'nct_id': 'int_nctid',
-                                                        'intervention_type': 'int_type',
-                                                        'name': 'int_name',
-                                                        'description': 'int_description'})
-    interventions_df = interventions_df.drop(columns=['int_id', 'int_description'])
-    conditions_df = conditions_df.rename(columns={'id': 'con_id',
-                                                  'nct_id': 'con_nctid',
-                                                  'name': 'con_name',
-                                                  'downcase_name': 'con_downcase_name'})
-    conditions_df = conditions_df.drop(columns=['con_id', 'con_name'])
-    browse_interventions_df = browse_interventions_df.rename(columns={'id': 'browseint_id',
-                                                                      'nct_id': 'browseint_nctid',
-                                                                      'mesh_term': 'browseint_meshterm',
-                                                                      'downcase_mesh_term': 'browseint_meshterm_downcase',
-                                                                      'mesh_type': 'browseint_meshtype'})
-
-    browse_interventions_df = browse_interventions_df.drop(columns=['browseint_id', 'browseint_meshterm'])
-    browse_conditions_df = browse_conditions_df.rename(columns={'id': 'browsecon_id',
-                                                                'nct_id': 'browsecon_nctid',
-                                                                'mesh_term': 'browsecon_meshterm',
-                                                                'downcase_mesh_term': 'browsecon_meshterm_downcase',
-                                                                'mesh_type': 'browsecon_meshtype'})
-    browse_conditions_df = browse_conditions_df.drop(columns=['browsecon_id', 'browsecon_meshterm'])                                                                                                                          
-
-    # merge conditions_df and interventions_df since they have relevant terms 
-    df = pd.merge(conditions_df, interventions_df, left_on='con_nctid', right_on = 'int_nctid')
-    df_dedup = df.drop_duplicates(subset = ['con_downcase_name', 'int_name'],
-                                          keep = 'first').reset_index(drop = True)
-
-    return df_dedup
-
-    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
-    #     display(df_dedup.head(100))
-
-
-    # with pd.option_context('expand_frame_repr', False, 'display.max_rows', None):
-    # 	print(df_dedup[['con_nctid', 'con_downcase_name', 'int_name']].head(100))
-
-
-    # df_dedup[['con_downcase_name', 'int_name']].to_csv('ClinTrials_KG_nodes.csv', sep ='\t', index=False)
-
-# the boss wants to see the properly formatted .tsv file output first, even if it's filled with dummy data...
-
-# Massage data extracted from ClinicalTrials.gov
-def preprocess_ct_data(ct_data):    
-    # first get only relevant columns from DB
-    ct_extract = pd.DataFrame(ct_data[['con_nctid', 'con_downcase_name', 'int_type', 'int_name']])
-    ct_extract = ct_extract.rename(columns={'con_nctid': 'nctid'})
-    # get CURIE column for nct_id column (https://bioregistry.io/registry/clinicaltrials)
-
-    ct_extract['nctid_curie'] = ct_extract['nctid']
-    ct_extract['nctid_curie'] = 'clinicaltrials:' + ct_extract['nctid'].astype(str)  # generate CURIEs for each clinical trials study
-
-    ct_final = pd.DataFrame(columns=['subject','predicate','object', 'subject_name','object_name','category'])
-
-    ct_final['subject'] = 'condition:' + ct_extract['con_downcase_name'].astype(str)
-    ct_final['predicate'] = 'biolink:related_to'
-    ct_final['object'] = 'intervention:' + ct_extract['int_name'].astype(str)   # this will not all be RxNorm CURIEs since some interventions are not drugs
-    ct_final.subject_name = ct_extract.con_downcase_name
-    ct_final.object_name = ct_extract.int_name
-    ct_final.category = 'biolink:Association'
-    ct_final['nctid'] = ct_extract['nctid']
-    ct_final['nctid_curie'] = ct_extract['nctid_curie']
-
-    return(ct_final)
-
-
-def select_cols_to_preprocess(ct_preprocessed):
-    # prep a list to hold dicts of de-asciied cols from the ClinTrials df
-    processed_ct_cols = []
-    metamap_compatible = {}
-    
-
-    # get unique lists of the concepts to MetaMap from the ClinTrials df
-    conditions = list(set(list(ct_preprocessed['subject_name'])))
-    interventions = list(filter(None, ct_preprocessed['object_name'].unique()))
-
-    # # FOR TESTING ON SUBSET...COMMENT TO RUN ON FULL
-    # conditions = random.sample(conditions, 10)
-    # interventions = random.sample(conditions, 10)
-
-
-    if not all(condition.isascii() for condition in conditions):
-        print("Non-ASCII chars are detected in Conditions col from ClinTrial (not checking other cols), proceed with text processing")
-        print("This step is unnecessary for MetaMap 2020+")
-        # process lists to remove non-ascii chars (this is not required for MetaMap 2020!!!!)
-        conditions_translated = dict((i, preprocess_cols_for_metamap(i)) for i in conditions)
-        interventions_translated = dict((i, preprocess_cols_for_metamap(i)) for i in interventions)
-        
-        metamap_compatible["conditions"] = conditions_translated
-        metamap_compatible["interventions"] = interventions_translated
-
-    else:
-        print("No non-ASCII chars detected or they are present, but we're not using MetaMap versions prior to 2020, no text processing required")
-        metamap_compatible["conditions"] = conditions
-        metamap_compatible["interventions"] = interventions
-
-    return(metamap_compatible)
-    
-
-def preprocess_cols_for_metamap(text):
+def de_ascii_er(text):
     non_ascii = "[^\x00-\x7F]"
     pattern = re.compile(r"[^\x00-\x7F]")
     non_ascii_text = re.sub(pattern, ' ', text)
     return non_ascii_text
 
-# setup MetaMap
-def start_metamap_servers():
 
-    # Start servers
-    os.system(metamap_base_dir + metamap_pos_server_dir + ' start') # Part of speech tagger
-    os.system(metamap_base_dir + metamap_wsd_server_dir + ' start') # Word sense disambiguation 
-     
-    # # Sleep a bit to give time for these servers to start up
-    sleep(60)
+def start_metamap_servers(metamap_dirs):
+    global metamap_pos_server_dir
+    global metamap_wsd_server_dir
+    metamap_pos_server_dir = 'bin/skrmedpostctl' # Part of speech tagger
+    metamap_wsd_server_dir = 'bin/wsdserverctl' # Word sense disambiguation 
+    
+    metamap_base_dir = metamap_dirs["metamap_base_dir"]
 
-def stop_metamap_servers():
+    metamap_executable_path_pos = os.path.join(metamap_base_dir, metamap_pos_server_dir)
+    metamap_executable_path_wsd = os.path.join(metamap_base_dir, metamap_wsd_server_dir)
+    command_pos = [metamap_executable_path_pos, 'start']
+    command_wsd = [metamap_executable_path_wsd, 'start']
 
-    # Stop servers
-    os.system(metamap_base_dir + metamap_pos_server_dir + ' stop') # Part of speech tagger
-    os.system(metamap_base_dir + metamap_wsd_server_dir + ' stop') # Word sense disambiguation 
+    # Start servers, with open portion redirects output of metamap server printing output to NULL
+    with open(os.devnull, "w") as fnull:
+        result_post = subprocess.call(command_pos, stdout = fnull, stderr = fnull)
+        result_wsd = subprocess.call(command_wsd, stdout = fnull, stderr = fnull)
+    sleep(5)    
 
-def run_metamap(input_term, source_restriction):
-    mm = MetaMap.get_instance(metamap_base_dir + metamap_bin_dir)
-    concepts_dict = dict()
-    if all(x is None for x in source_restriction):
+def stop_metamap_servers(metamap_dirs):
+    metamap_base_dir = metamap_dirs["metamap_base_dir"]
+    metamap_executable_path_pos = os.path.join(metamap_base_dir, metamap_pos_server_dir)
+    metamap_executable_path_wsd = os.path.join(metamap_base_dir, metamap_wsd_server_dir)
+    command_pos = [metamap_executable_path_pos, 'stop']
+    command_wsd = [metamap_executable_path_wsd, 'stop']
+    
+    # Stop servers, with open portion redirects output of metamap server printing output to NULL
+    with open(os.devnull, "w") as fnull:
+        result_post = subprocess.call(command_pos, stdout = fnull, stderr = fnull)
+        result_wsd = subprocess.call(command_wsd, stdout = fnull, stderr = fnull)
+    sleep(5)  
+    
+def check_os():
+    if "linux" in sys.platform:
+        print("Linux platform detected")
+        metamap_base_dir = "/users/knarsinh/projects/clinical_trials/metamap/public_mm/"    # /users/knarsinh/projects/clinical_trials/metamap/public_mm 
+        metamap_bin_dir = 'bin/metamap20'
+        metamap_version = '2020'
+    else:
+        metamap_base_dir = '/Volumes/TOSHIBA_EXT/ISB/clinical_trials/public_mm/' # for running on local
+        metamap_bin_dir = 'bin/metamap18'
+        metamap_version = '2018'
+        
+    return {"metamap_base_dir":metamap_base_dir, "metamap_bin_dir":metamap_bin_dir, "metamap_version":metamap_version} 
+
+@sleep_and_retry
+@limits(calls=CALLS, period=RATE_LIMIT)
+def check_limit():
+    ''' Empty function just to check for calls to Name Resolver API '''
+    return
+
+def wrap(x): # use this to convert string objects to dicts 
+    try:
+        a = ast.literal_eval(x)
+        return(a)
+    except:
+        pass
+
+
+def read_raw_ct_data(flag_and_path, subset_size):
+    if flag_and_path["term_program_flag"]:
+        print("Exiting program. Assuming KG has already been constructed from most recent data dump from AACT.")
+        exit()
+    else:
+        data_extracted = flag_and_path["data_extracted_path"]
+        # read in pipe-delimited files 
+        conditions_df = pd.read_csv(data_extracted + '/conditions.txt.gz', sep='|', index_col=False, header=0, on_bad_lines = 'warn')
+        interventions_df = pd.read_csv(data_extracted + '/interventions.txt.gz', sep='|', index_col=False, header=0, on_bad_lines = 'warn')
+        interventions_alts_df = pd.read_csv(data_extracted + '/intervention_other_names.txt.gz', sep='|', index_col=False, header=0, on_bad_lines = 'warn')
+
+        if subset_size:   # if a subset size is given, we are running this script on a small subset of the dataset
+            conditions_df = conditions_df.sample(n=subset_size)
+            interventions_df = interventions_df.sample(n=subset_size)
+            interventions_alts_df = interventions_alts_df.sample(n=subset_size)
+    
+    df_dict = {"conditions": conditions_df, "interventions": interventions_df, "interventions_alts": interventions_alts_df}
+    return df_dict
+
+
+def cache_manually_selected_terms():    
+
+    def return_curie_dict(curie_info_delimited):
+        keys = ["mapped_name", "mapped_curie", "mapped_score", "mapped_semtypes"]
+        curie_list = curie_info_delimited.split(" | ")
+        curie_dict = dict(zip(keys, curie_list))
+        return curie_dict
+
+    files = glob.glob("*.xlsx")
+    manually_selected_file = [i for i in files if "manual_review" in i if not i.startswith("~")][0] # find the file of manual selections
+    manually_selected = pd.read_excel(manually_selected_file)
+    cols_to_fill = ["mapping_tool", "term_type", "clintrial_term", "input_term"]
+    manually_selected.loc[:,cols_to_fill] = manually_selected.loc[:,cols_to_fill].ffill()
+
+    manually_selected = manually_selected[~manually_selected['manually_selected_CURIE'].isnull()] # get rows where terms were manually chosen
+    manually_selected.drop(["mapping_tool_response"], axis = 1, inplace = True)
+
+    manually_selected["manually_selected_CURIE"] = manually_selected["manually_selected_CURIE"].apply(lambda x: return_curie_dict(x)) # convert | delimited strings to CURIE dict
+    manually_selected["score"] = 1000  # human curated score = 1000
+    manually_selected.rename(columns = {'manually_selected_CURIE':'mapping_tool_response'}, inplace = True)
+    manually_selected = manually_selected[["mapping_tool", "term_type", "clintrial_term", "input_term", "mapping_tool_response", "score"]] # reorder columns to be same as the cache files we're appending to 
+    manually_selected.to_csv("mapping_cache.tsv", mode='a', header=False, sep ="\t", index=False)
+
+
+def check_against_cache(df_dict):
+    
+    conditions_list = df_dict['conditions'].name.unique().tolist()
+    conditions_list = [str(i) for i in conditions_list]
+    conditions_list = list(set([i.lower() for i in conditions_list]))
+    
+    interventions_list = df_dict['interventions'].name.unique().tolist()
+    interventions_list = [str(i) for i in interventions_list]
+    interventions_list = list(set([i.lower() for i in interventions_list]))
+    
+    interventions_alts_list = df_dict['interventions_alts'].name.unique().tolist()
+    interventions_alts_list = [str(i) for i in interventions_alts_list]
+    interventions_alts_list = list(set([i.lower() for i in interventions_alts_list]))
+    
+    cache_df = pd.DataFrame() # initialize empty df --> use to check if reading from tsv works or not
+
+    try:
+        cache_manually_selected_terms()
+    except:
+        print("No manually selected terms file found")
+    
+    print("Are there new terms to map?")
+    try:
+        cache_df = pd.read_csv("mapping_cache.tsv", sep ="\t", usecols = ['term_type', 'clintrial_term'], index_col=False, header=0, on_bad_lines = 'skip', encoding="utf-8", dtype=object)
+    except:
+        print("No cache of terms found. Proceeding to map entire KG from scratch")
+
+    if not cache_df.empty: # if the cache is there, which most often it should be, then we proceed with comparing against cache
+        print("Cache found, comparing against it for new terms")
+        conditions_cache = cache_df[cache_df["term_type"] == "condition"]
+        conditions_cache = conditions_cache['clintrial_term'].unique().tolist()
+        conditions_cache = list(set([str(i).lower() for i in conditions_cache]))
+
+        conditions_new = [x for x in conditions_list if x not in conditions_cache] # find conditions not in the cache (i.g. new conditions to map)
+        conditions_new = list(filter(None, conditions_new))
+        conditions_new = [str(i) for i in conditions_new]
+        
+        interventions_cache = cache_df[cache_df["term_type"] == "intervention"]
+        interventions_cache = interventions_cache['clintrial_term'].unique().tolist()
+        interventions_cache = list(set([str(i).lower() for i in interventions_cache]))
+        
+        interventions_new = [x for x in interventions_list if x not in interventions_cache] # find interventions not in the cache (i.g. new interventions to map)
+        interventions_new = list(filter(None, interventions_new))
+        interventions_new = [str(i) for i in interventions_new]
+        
+        interventions_alts_cache = cache_df[cache_df["term_type"] == "alternate_intervention"]
+        interventions_alts_cache = interventions_alts_cache['clintrial_term'].unique().tolist()
+        interventions_alts_cache = list(set([str(i).lower() for i in interventions_alts_cache]))
+        
+        interventions_alts_new = [x for x in interventions_alts_list if x not in interventions_alts_cache] # find interventions_alts not in the cache (i.g. new interventions_alts to map)
+        interventions_alts_new = list(filter(None, interventions_alts_new))
+        interventions_alts_new = [str(i) for i in interventions_alts_new]
+        
+    else:
+        conditions_new = conditions_list
+        interventions_new = interventions_list
+        interventions_alts_new = interventions_alts_list
+        
+    dict_new_terms = {"conditions": conditions_new, "interventions": interventions_new, "interventions_alts": interventions_alts_new}
+
+    return dict_new_terms
+
+
+def get_nr_response(orig_term):
+    def create_session():
+        s = requests.Session()
+        return s
+ 
+    sess = create_session()
+ 
+    """   Runs Name Resolver   """
+    nr_url = 'https://name-resolution-sri.renci.org/lookup'
+    max_retries = 3 
+    
+    input_term = orig_term # in MetaMap, we have to potentially deascii the term and lower case it...for Name Resolver, we don't need to do that. To keep columns consist with MetaMap output, we just keep it and say the original term and the input term are the same. For MetaMap, they might be different
+    retries = 0
+    params = {'string':orig_term, 'limit':1} # limit -1 makes this return all available equivalent CURIEs name resolver can give (deprecated)
+    while retries <= max_retries:
+        try:
+            r = sess.post(nr_url, params=params)
+            check_limit() # counts how many requests have been sent to NR. If limit of 40 have been sent, sleeps for 1 min
+            if r.status_code == 200:
+                mapping_tool_response = r.json()  # process Name Resolver response
+                return mapping_tool_response
+            else:
+                return None
+        except (requests.RequestException, ConnectionResetError, OSError) as ex:
+            print(f"\nName Resolver request failed for term: {term}. Error: {ex}")
+            retries += 1
+            if retries < max_retries:
+                print(f"Retrying ({retries}/{max_retries}) after a delay.")
+                time.sleep(2 ** retries)  # Increase the delay between retries exponentially
+            else:
+                print(f"Max retries (Name Resolver) reached for term: {term}.")
+                return None
+
+# I'm only getting 1 concept from Name Resolver. 
+# Both MetaMap and Name Resolver return several, 
+# but I only take 1 from Name Resolver bc they have a preferred concept.
+# MetaMap's 2nd or 3rd result is often the best one, so I collect all of them and try to score"
+
+def process_metamap_concept(concept):
+    concept = concept._asdict()
+    concept_dict  = {"mapped_name": concept.get("preferred_name"),
+                     "mapped_curie": concept.get("cui"),
+                     "mapped_score": concept.get("score"),
+                     "mapped_semtypes": concept.get("semtypes")}
+    if not concept.get("preferred_name"): # if condition triggered if the concept dict looks like following, where AA is for Abbreviation.... {'index': 'USER', 'aa': 'AA', 'short_form': 'copd', 'long_form': 'chronic obstructive pulmonary disease', 'num_tokens_short_form': '1', 'num_chars_short_form': '4', 'num_tokens_long_form': '7', 'num_chars_long_form': '37', 'pos_info': '43:4'}
+        concept_dict = None
+    return concept_dict
+
+def process_nameresolver_response(nr_response):              
+    nr_curie = nr_response[0]["curie"]
+    nr_name = nr_response[0]["label"]
+    nr_type = nr_response[0]["types"][0]
+    nr_score = nr_response[0]["score"]
+    concept_dict = {"mapped_name": nr_name,
+                    "mapped_curie": nr_curie,
+                    "mapped_score": nr_score,
+                    "mapped_semtypes": nr_type}
+    return concept_dict
+
+
+def run_metamap(term_pair, params, term_type):
+    mm = MetaMap.get_instance(metamap_dirs["metamap_base_dir"] + metamap_dirs["metamap_bin_dir"])
+    
+    from_mapper = []
+    orig_term = term_pair[0]
+    input_term = term_pair[1]
+
+    if term_type == "condition":
         try:
             concepts,error = mm.extract_concepts([input_term],
-                                                 word_sense_disambiguation = True,
-                                                 prune = 10,
-                                                 composite_phrase = 1)
-            concepts_dict[input_term] = concepts
+                restrict_to_sts = params["restrict_to_sts"],
+                term_processing = params["term_processing"],
+                ignore_word_order = params["ignore_word_order"],
+                strict_model = params["strict_model"],)
+            if concepts:
+                mapping_tool = "metamap"
+                for concept in concepts:
+                    concept_info = []
+                    new_concept_dict = process_metamap_concept(concept)
+                    concept_info.extend([mapping_tool, term_type, orig_term, input_term, new_concept_dict]) # score column is empty, Format of output TSV: header = ['mapping_tool', 'term_type', 'clintrial_term', 'input_term', 'mapping_tool_response', 'score']
+                    from_mapper.append(concept_info)
+            else:
+                concepts,error = mm.extract_concepts([input_term],
+                    term_processing = params["term_processing"],
+                    ignore_word_order = params["ignore_word_order"])
+                if concepts:
+                    for concept in concepts:
+                        concept_info = []
+                        new_concept_dict = process_metamap_concept(concept)
+                        concept_info.extend([mapping_tool, term_type, orig_term, input_term, new_concept_dict]) # score column is empty, Format of output TSV: header = ['mapping_tool', 'term_type', 'clintrial_term', 'input_term', 'mapping_tool_response', 'score']
+                        from_mapper.append(concept_info)
         except:
-            concepts_dict[input_term] = None 
+            return from_mapper
+        return from_mapper
     else:
         try:
             concepts,error = mm.extract_concepts([input_term],
-                                                 word_sense_disambiguation = True,
-                                                 restrict_to_sources=source_restriction,
-                                                 prune = 10,
-                                                 composite_phrase = 1)
-            concepts_dict[input_term] = concepts
+                exclude_sts = params["exclude_sts"],
+                term_processing = params["term_processing"],
+                ignore_word_order = params["ignore_word_order"],
+                strict_model = params["strict_model"],) 
+            if concepts:
+                mapping_tool = "metamap"
+                for concept in concepts:
+                    concept_info = []
+                    new_concept_dict = process_metamap_concept(concept)
+                    concept_info.extend([mapping_tool, term_type, orig_term, input_term, new_concept_dict]) # score column is empty, Format of output TSV: header = ['mapping_tool', 'term_type', 'clintrial_term', 'input_term', 'mapping_tool_response', 'score']
+                    from_mapper.append(concept_info)
+            else:
+                concepts,error = mm.extract_concepts([input_term],
+                    term_processing = params["term_processing"],
+                    ignore_word_order = params["ignore_word_order"])
+                if concepts:
+                    for concept in concepts:
+                        concept_info = []
+                        new_concept_dict = process_metamap_concept(concept)
+                        concept_info.extend([mapping_tool, term_type, orig_term, input_term, new_concept_dict]) # score column is empty, Format of output TSV: header = ['mapping_tool', 'term_type', 'clintrial_term', 'input_term', 'mapping_tool_response', 'score']
+                        from_mapper.append(concept_info)
         except:
-            concepts_dict[input_term] = None 
-    return(concepts_dict)
+            return from_mapper
+        return from_mapper
+
+def write_to_cache(from_mapper):
+    mapping_filename = "mapping_cache.tsv"
+    output = open(mapping_filename, 'a', newline='', encoding="utf-8") 
+    csv_writer = csv.writer(output, delimiter='\t')
+    for result in from_mapper:
+        # print(result)
+        if result[0] == "mapping_tools_failed":
+            result.append(-1)
+        else:
+            result.append("unscored")
+            # print(result)
+        with csv_writer_lock:
+            csv_writer.writerow(result)
+    output.close()
 
 
-def write_output_out(output_to_store):
-    # CAREFUL: Running WILL OVERWRITE METAMAPPED DISEASES AND INTERVENTIONS FILES, WHICH TAKE FOREVER TO GENERATE!
+def run_mappers(term_pair, params, term_type):
 
-    # write mapped diseases and interventions to pickle file
-    with open('metamapped_conditions.txt', 'wb') as file:
-        pickle.dump(output_to_store.get("conditions"), file)
-    with open('metamapped_interventions.txt', 'wb') as file:
-        pickle.dump(output_to_store.get("interventions"), file)
+    orig_term = term_pair[0]
+    input_term = term_pair[1]
 
-    # write mapped diseases and interventions to human readable file
-    with open('readable_metamapped_conditions.txt', 'w') as file:
-        file.write(json.dumps(output_to_store.get("conditions"), indent=4))
-    with open('readable_metamapped_interventions.txt', 'w') as file:
-        file.write(json.dumps(output_to_store.get("interventions"), indent=4))
+    # Format of output TSV: header = ['mapping_tool', 'term_type', 'clintrial_term', 'input_term', 'mapping_tool_response', 'score']
+    from_mapper = run_metamap(term_pair, params, term_type)
+    if from_mapper:
+        write_to_cache(from_mapper)
+    else:
+        from_mapper = []
+        nr_response = get_nr_response(orig_term) 
+        if nr_response: # if Name Resolver gives response, process repsonse
+            input_term = orig_term # no preprocessing (lowercasing or deascii-ing) necessary to submit terms to Name Resolver (unlike MetaMap)
+            mapping_tool = "nameresolver"
+            concept_info = []
+            new_concept_dict = process_nameresolver_response(nr_response)
+            concept_info.extend([mapping_tool, term_type, orig_term, input_term, new_concept_dict]) 
+            from_mapper.append(concept_info)
+            write_to_cache(from_mapper)
+        else:
+            concept_info = []
+            # print("Nothing returned from NR or Metamap")
+            concept_info.extend(["mapping_tools_failed", term_type, orig_term, input_term, "mapping_tools_failed"])
+            from_mapper.append(concept_info)
+        write_to_cache(from_mapper)
+    
+def parallelize_mappers(term_pair_list, params, term_type):
+    # n_workers = 2 * multiprocessing.cpu_count() - 1
+    n_workers = 6
+
+    Parallel(n_jobs=n_workers,backend="multiprocessing")(
+        delayed(run_mappers)
+        (term_pair, params, term_type) 
+  for term_pair in term_pair_list
+  )
+          
+
+def term_list_to_mappers(dict_new_terms):   
+    metamap_version = [int(s) for s in re.findall(r'\d+', metamap_dirs.get('metamap_bin_dir'))] # get MetaMap version being run 
+    deasciier = np.vectorize(de_ascii_er) # vectorize function
+    
+    # open mapping cache to add mapped terms
+    mapping_filename = "mapping_cache.tsv"
+    if os.path.exists(mapping_filename):
+        output = open(mapping_filename, 'a', newline='', encoding="utf-8") 
+        output.close()
+    else:
+        output = open(mapping_filename, 'w+', newline='', encoding='utf-8')
+        col_names = ['mapping_tool', 'term_type', 'clintrial_term', 'input_term', 'mapping_tool_response', 'score']
+        csv_writer = csv.writer(output, delimiter='\t')
+        csv_writer.writerow(col_names)
+        output.close()
+
+    #  - Conditions
+    condition_semantic_type_restriction = ['acab,anab,cgab,comd,dsyn,inpo,mobd,neop,patf,clna,fndg']  # see https://lhncbc.nlm.nih.gov/ii/tools/MetaMap/Docs/SemanticTypes_2018AB.txt for semantic types ("acab,anab,etc.")
+    conditions = dict_new_terms.get("conditions")
+    condition_params = {"restrict_to_sts":condition_semantic_type_restriction, "term_processing":True, "ignore_word_order":True, "strict_model":False, "prune":20} # strict_model and relaxed_model are presumably opposites? relaxed_model = True is what I want, but that option appears to be broken in Pymetamap (returns no results when used). Using strict_model = False instead...
+
+    #  - Interventions
+    condition_semantic_type_restriction = ['acab,anab,cgab,comd,dsyn,inpo,mobd,neop,patf,clna,fndg']  # see https://lhncbc.nlm.nih.gov/ii/tools/MetaMap/Docs/SemanticTypes_2018AB.txt for semantic types ("acab,anab,etc.")
+    interventions = dict_new_terms.get("interventions")
+    intervention_params = {"exclude_sts":condition_semantic_type_restriction, "term_processing":True, "ignore_word_order":True, "strict_model":False, "prune":20} # strict_model and relaxed_model are presumably opposites? relaxed_model = True is what I want, but that option appears to be broken in Pymetamap (returns no results when used). Using strict_model = False instead...we are also excluding all semantic types of condition bc interventions can be anything and moreover, prune=30 for memory issue (https://lhncbc.nlm.nih.gov/ii/tools/MetaMap/Docs/OutOfMemory.pdf)
+
+    #  - Alternate Interventions
+    condition_semantic_type_restriction = ['acab,anab,cgab,comd,dsyn,inpo,mobd,neop,patf,clna,fndg']  # see https://lhncbc.nlm.nih.gov/ii/tools/MetaMap/Docs/SemanticTypes_2018AB.txt for semantic types ("acab,anab,etc.")
+    interventions_alts = dict_new_terms.get("interventions_alts")
+    intervention_alts_params = intervention_params # same params as interventions
+    
+    chunksize = 10
+    
+    if metamap_version[0] >= 20:
+        
+        cons_processed = list(zip(conditions, conditions))  # these are lists of the same term repeated twice, bc MetaMap 2020 does not require deasciing, so the 2nd term remains unchanged and is a repeat of the first term
+        ints_processed = list(zip(interventions, interventions))
+        ints_alts_processed = list(zip(interventions_alts, interventions_alts))
+    
+        conditions_chunked = [cons_processed[i:i + chunksize] for i in range(0, len(cons_processed), chunksize)]  
+        interventions_chunked = [ints_processed[i:i + chunksize] for i in range(0, len(ints_processed), chunksize)]  
+        interventions_alts_chunked = [ints_alts_processed[i:i + chunksize] for i in range(0, len(ints_alts_processed), chunksize)] 
+        
+        print("MetaMap version >= 2020, conduct mapping on original terms")
+        
+        start_metamap_servers(metamap_dirs) # start the MetaMap servers
+
+        LENGTH = len(cons_processed)  # Number of iterations required to fill progress bar (pbar)
+        pbar = tqdm(total=LENGTH, desc="% conditions mapped", position=0, leave=True, mininterval = LENGTH/40, bar_format='{l_bar}{bar:40}{r_bar}{bar:-10b}')  # Init progress bar
+        for chunk in conditions_chunked:
+            # parallelize_mappers(chunk, condition_params, "condition", mapping_filename)
+            parallelize_mappers(chunk, condition_params, "condition")
+            pbar.update(n=len(chunk))
+
+        LENGTH = len(ints_processed)  # Number of iterations required to fill progress bar (pbar)
+        pbar = tqdm(total=LENGTH, desc="% interventions mapped", position=0, leave=True, mininterval = LENGTH/40, bar_format='{l_bar}{bar:40}{r_bar}{bar:-10b}')  # Init progress bar
+        for chunk in interventions_chunked:
+            # parallelize_mappers(chunk, intervention_params, "intervention", mapping_filename)
+            parallelize_mappers(chunk, intervention_params, "intervention")
+            pbar.update(n=len(chunk))
 
 
-    # # write to pickle file
-    # with open('metamapped_conditions.txt', 'wb') as file:
-    #     pickle.dump(output_to_store, file)
+        LENGTH = len(ints_alts_processed)  # Number of iterations required to fill progress bar (pbar)
+        pbar = tqdm(total=LENGTH, desc="% alternate interventions mapped", position=0, leave=True, mininterval = LENGTH/40, bar_format='{l_bar}{bar:40}{r_bar}{bar:-10b}')  # Init progress bar
+        for chunk in interventions_alts_chunked:
+            # parallelize_mappers(chunk, intervention_alts_params, "alternate_intervention", mapping_filename)
+            parallelize_mappers(chunk, intervention_alts_params, "alternate_intervention")
+            pbar.update(n=len(chunk))
 
-    # # write to human readable file
-    # with open('readable_metamapped_conditions.txt', 'w') as file:
-    #     file.write(json.dumps(output_to_store, indent=4))
+        stop_metamap_servers(metamap_dirs) # stop the MetaMap servers
+
+        
+    else:
+        print("MetaMap version < 2020, conduct mapping on terms after removing ascii characters")
+        
+        deascii_cons = deasciier(conditions)
+        deascii_ints = deasciier(interventions)
+        deascii_int_alts = deasciier(interventions_alts)
+                
+        cons_processed = list(zip(conditions, deascii_cons)) # these are lists of the original term, and the deasciied term, bc MetaMap 2018 does not process ascii characters
+        ints_processed = list(zip(interventions, deascii_ints))
+        ints_alts_processed = list(zip(interventions_alts, deascii_int_alts))
+        
+        conditions_chunked = [cons_processed[i:i + chunksize] for i in range(0, len(cons_processed), chunksize)]  
+        interventions_chunked = [ints_processed[i:i + chunksize] for i in range(0, len(ints_processed), chunksize)]  
+        interventions_alts_chunked = [ints_alts_processed[i:i + chunksize] for i in range(0, len(ints_alts_processed), chunksize)] 
+        
+        start_metamap_servers(metamap_dirs) # start the MetaMap servers
+
+        LENGTH = len(cons_processed)  # Number of iterations required to fill progress bar (pbar)
+        pbar = tqdm(total=LENGTH, desc="% conditions mapped", position=0, leave=True, mininterval = LENGTH/40, bar_format='{l_bar}{bar:40}{r_bar}{bar:-10b}')  # Init progress bar
+        for chunk in conditions_chunked:
+            # parallelize_mappers(chunk, condition_params, "condition", mapping_filename)
+            parallelize_mappers(chunk, condition_params, "condition")
+
+            pbar.update(n=len(chunk))
 
 
-def get_mapped_ct_data(metamapped_concept, translation_dict):
-    for key, val in metamapped_concept.items():
-        for concept in val:
-            concept = concept._asdict()
-            row = [key]
-            original_concept = (list(translation_dict.keys())[list(translation_dict.values()).index(key)])
-            row.append(original_concept)
-            row.extend([concept.get(k) for k in ['preferred_name', 'cui', 'score', 'semtypes']])
-            return row # we only want the first mapped concept
+        LENGTH = len(ints_processed)  # Number of iterations required to fill progress bar (pbar)
+        pbar = tqdm(total=LENGTH, desc="% interventions mapped", position=0, leave=True, mininterval = LENGTH/40, bar_format='{l_bar}{bar:40}{r_bar}{bar:-10b}')  # Init progress bar
+        for chunk in interventions_chunked:
+            # parallelize_mappers(chunk, intervention_params, "intervention", mapping_filename)
+            parallelize_mappers(chunk, intervention_params, "intervention")
+            pbar.update(n=len(chunk))
 
 
+        LENGTH = len(ints_alts_processed)  # Number of iterations required to fill progress bar (pbar)
+        pbar = tqdm(total=LENGTH, desc="% alternate interventions mapped", position=0, leave=True, mininterval = LENGTH/40, bar_format='{l_bar}{bar:40}{r_bar}{bar:-10b}')  # Init progress bar
+        for chunk in interventions_alts_chunked:
+            # parallelize_mappers(chunk, intervention_alts_params, "alternate_intervention", mapping_filename)
+            parallelize_mappers(chunk, intervention_alts_params, "alternate_intervention")
+            pbar.update(n=len(chunk))
 
-def driver():
-    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
-    #     display(df_dedup.head(100))
+        stop_metamap_servers(metamap_dirs) # stop the MetaMap servers
+    
+    # """ Remove duplicate rows """
+    mapping_filename = "mapping_cache.tsv"
+    cache = pd.read_csv(mapping_filename, sep='\t', index_col=False, header=0, encoding_errors='ignore', on_bad_lines='skip')
+    cache = cache.sort_values(by=['clintrial_term', 'score'], ascending=False).drop_duplicates(subset=['mapping_tool', 'term_type', 'clintrial_term', 'mapping_tool_response']).sort_index()
+
+    # cache = cache.drop_duplicates()
+    cache.to_csv(mapping_filename, sep="\t", index=False, header=True) # output deduplicated cache terms to TSV
     
 
-    metamapped_dict = {}
-    latest_file_date = latest_date_download()
-    data_extracted = get_trial_data(latest_file_date)
-    ct_data = process_trial_data(data_extracted)
-    ct_preprocessed = preprocess_ct_data(ct_data)
-    ct_processed = select_cols_to_preprocess(ct_preprocessed)
-    # ct_processed.get("conditions")
-    # print(ct_processed.get("interventions"))
-    start_metamap_servers()
-    
-    # uncomment below to run on subset of dicts (see random sampling above)
-    import random
-    conditions_proc = dict(random.sample(list(ct_processed.get("conditions").items()), k=100))  # uncomment for testing on subset
-    interventions_proc = dict(random.sample(list(ct_processed.get("interventions").items()), k=100)) # uncomment for testing on subset
+def score_mappings():
+    print("Scoring cache")
 
-    # print(conditions_proc)
-    # print(conditions_proc.values())
-    # print(ct_processed.get("conditions").values())
-    # print(type(ct_processed.get("conditions").values()))
+    def get_max_score(str1, str2, old_score):
+        
+        try:
+            if old_score == "unscored":
+                sortratio_score = get_token_sort_ratio(str1, str2)
+                similarity_score = get_similarity_score(str1, str2)
+                max_score = max(sortratio_score, similarity_score)
+                score = max_score
+            else:
+                score = old_score   
+        except:
+            score = old_score
+        return score
 
-    metamapped_conditions = multiprocessing.Pool(multiprocessing.cpu_count() - 1).starmap(run_metamap,
-        zip(list(conditions_proc.values()),
-            [['SNOMEDCT_US', 'SNOMEDCT_VET', 'ICD10CM', 'ICD10CM', 'ICD10PCS', 'ICD9CM', 'ICD9CM']]*len(list(conditions_proc.values()))))
-    metamapped_interventions = multiprocessing.Pool(multiprocessing.cpu_count() - 1).starmap(run_metamap, 
-                                                                             zip(list(interventions_proc.values()),
-                                                                                 [[None]]*len(list(interventions_proc.values()))))
+    def wrap(x): # use this to convert string objects to dicts 
+        try:
+            a = ast.literal_eval(x)
+            return(a)
+        except:
+            pass
 
+    with pd.read_csv("mapping_cache.tsv", sep='\t', index_col=False, header=0, on_bad_lines = 'warn', usecols=lambda c: not c.startswith('Unnamed:'), chunksize=5000) as reader:
+        write_header = True
+        for chunk in reader:
+            chunk["mapping_tool_response"] = chunk["mapping_tool_response"].apply(lambda x: wrap(x))
+            mapping_info = chunk["mapping_tool_response"].apply(pd.Series, dtype='object')
+            chunk["mapped_name"] = mapping_info["mapped_name"]
+            chunk["score"] = chunk.apply(lambda x: get_max_score(x['input_term'], x['mapped_name'], x['score']), axis=1) # get score for score rows that are empty/not scored yet
+            chunk.drop(["mapped_name"], axis = 1, inplace = True)
+            chunk.to_csv(f'mapping_cache_scored_temp.tsv', sep="\t", index=False, header=write_header, mode = 'a', encoding="utf-8") # output to TSV
+            write_header = False
 
+    os.rename('mapping_cache.tsv','mapping_cache_backup.tsv')   # create a backup of the cache       
+    os.rename('mapping_cache_scored_temp.tsv','mapping_cache.tsv')   
 
-   
-    # metamapped_conditions = multiprocessing.Pool(multiprocessing.cpu_count() - 1).starmap(run_metamap,
-    #     zip(list(ct_processed.get("conditions").values()),
-    #         [['SNOMEDCT_US', 'SNOMEDCT_VET', 'ICD10CM', 'ICD10CM', 'ICD10PCS', 'ICD9CM', 'ICD9CM']]*len(list(ct_processed.get("conditions").values()))))
-    # metamapped_interventions = multiprocessing.Pool(multiprocessing.cpu_count() - 1).starmap(run_metamap, 
-    #                                                                          zip(list(ct_processed.get("interventions").values()),
-    #                                                                              [[None]]*len(list(ct_processed.get("interventions").values()))))
+    # """ Remove duplicate rows """
+    mapping_filename = "mapping_cache.tsv"
+    cache = pd.read_csv(mapping_filename, sep='\t', index_col=False, header=0, encoding_errors='ignore', on_bad_lines='skip')
+    cache = cache.sort_values(by=['clintrial_term', 'score', 'term_type', 'mapping_tool'], ascending=False).drop_duplicates(subset=['mapping_tool', 'term_type', 'clintrial_term', 'mapping_tool_response']).sort_index()
 
-    # UNCOMMENT TO RUN ON FULL DATASET
-    # metamapped_conditions = multiprocessing.Pool(multiprocessing.cpu_count() - 1).starmap(run_metamap,
-    #     zip(list(ct_processed.get("conditions").values()),
-    #         [['SNOMEDCT_US', 'SNOMEDCT_VET', 'ICD10CM', 'ICD10CM', 'ICD10PCS', 'ICD9CM', 'ICD9CM']]*len(list(ct_processed.get("conditions").values()))))
-
-    # metamapped_interventions = multiprocessing.Pool(multiprocessing.cpu_count() - 1).starmap(run_metamap,
-    #     zip(list(ct_processed.get("interventions").values()),
-    #         [['SNOMEDCT_US', 'SNOMEDCT_VET', 'ICD10CM', 'ICD10CM', 'ICD10PCS', 'ICD9CM', 'ICD9CM']]*len(list(ct_processed.get("interventions").values()))))
-
-    stop_metamap_servers()
-    metamapped_dict["conditions"] = metamapped_conditions
-    metamapped_dict["interventions"] = metamapped_interventions
-    write_output_out(metamapped_dict)
+    # cache = cache.drop_duplicates()
+    cache.to_csv(mapping_filename, sep="\t", index=False, header=True) # output deduplicated cache terms to TSV
 
 
-    # with open('metamapped_conditions.txt', 'rb') as f:
-    #     metamapped_conditions = pickle.load(f)
-    
-    # with open('metamapped_interventions.txt', 'rb') as f:
-    #     metamapped_interventions = pickle.load(f)
+def output_terms_files():
+    print("Generating output files")
+
+    """   Get high scorers   """
+    cache = pd.read_csv("mapping_cache.tsv", sep='\t', index_col=False, header=0)
+    cache['score'] = pd.to_numeric(cache['score'], errors='coerce')
+    highscorers = cache[cache['score'] >= 80] 
+    # test = highscorers.groupby('clintrial_term')
+    idx = highscorers.groupby('clintrial_term')['score'].idxmax()  # group by the clinical trial term and get the highest scoring
+    auto_selected = highscorers.loc[idx]
+    auto_selected.to_csv(f'autoselected_terms.tsv', sep="\t", index=False, header=True) # output to TSV
+
+    """   Get low scorers, aggregate for manual selections  """
+    low_scorers = cache[cache['score'] < 80]
+    manual_review = low_scorers[~low_scorers.clintrial_term.isin(highscorers['clintrial_term'].unique().tolist())] # there are terms autoselected that have mappings that didn't pass threshold too, but we want to consider that term mapped. So get rid of these rows too
+    mapping_tool_response = manual_review['mapping_tool_response'].apply(lambda x: wrap(x))
+    manual_review = manual_review.copy()
+    mapping_tool_response = mapping_tool_response.apply(pd.Series, dtype='object')
+    manual_review.loc[:, 'mapping_tool_response_lists'] = mapping_tool_response.values.tolist()
+    manual_review.drop('mapping_tool_response', axis=1, inplace=True)
+    manual_review = manual_review[["mapping_tool", "term_type", "clintrial_term", "mapping_tool_response_lists", "input_term", "score"]]
+    # manual_review['mapping_tool_response_lists'] = manual_review['mapping_tool_response_lists'].apply(lambda x: ' | '.join(x) if isinstance(x, list) else None)  # Multindexing does not work on lists, so remove the CURIE information out of the list to enable this
+    manual_review['mapping_tool_response'] = [' | '.join(map(str, l)) for l in manual_review['mapping_tool_response_lists']]
+    manual_review.drop('mapping_tool_response_lists', axis=1, inplace=True)
+    manual_review = manual_review.sort_values(by=["mapping_tool", "term_type", "clintrial_term", "input_term"], ascending=False)
+    manual_review.set_index(["mapping_tool", "term_type", "clintrial_term", "input_term"], inplace=True)   # create index
+    manual_review['manually_selected_CURIE'] = None # make a column 
+    manual_review.to_csv('manual_review.tsv', sep="\t", index=False, header=True)
+
+    # manual_review.to_excel('manual_review.xlsx', engine='xlsxwriter', index=True) # errors out bc excel sheet has too many rows
+
+    sys.stdout.flush() 
+
+    print("Done\n")
 
 
-    # print(metamapped_dict.get("conditions"))
-    # print("\n\n\n\n")
-    # print(ct_processed.get("conditions"))
-    
-    with multiprocessing.Pool(multiprocessing.cpu_count() - 1) as pool:
-        final_metamapped_conditions = pool.starmap(get_mapped_ct_data,
-            zip(metamapped_dict.get("conditions"),
-                repeat(ct_processed.get("conditions"))))
-        final_metamapped_interventions = pool.starmap(get_mapped_ct_data,
-            zip(metamapped_dict.get("interventions"),
-                repeat(ct_processed.get("interventions"))))
+if __name__ == "__main__":
+    print("Starting mapping script")
+    # flag_and_path = get_raw_ct_data() # download raw data
 
-    master_condition_dict = {condition[0]:condition[1:] for condition in final_metamapped_conditions if condition}  
-    master_intervention_dict = {intervention[0]:intervention[1:] for intervention in final_metamapped_interventions if intervention}    
-
-    baseline_final_condition_dict = {}
-    baseline_final_intervention_dict = {}
-
-    for k, v in master_condition_dict.items():
-        orig_con = k.lower()
-        orig_con = orig_con.strip()
-        mapped_con = str(v[1])
-        mapped_con = mapped_con.lower()
-        mapped_con = mapped_con.strip()
-        if orig_con == mapped_con:
-            baseline_final_condition_dict[k] = v[1:] 
-            
-    for k, v in master_intervention_dict.items():
-        orig_int = k.lower()
-        orig_int = orig_int.strip()
-        mapped_int = str(v[1])
-        mapped_int = mapped_int.lower()
-        mapped_int = mapped_int.strip()
-        if orig_int == mapped_int:
-            baseline_final_intervention_dict[k] = v[1:] 
-
-    # create CURIEs from values of baseline lists
-    condition_curie_dict = {}
-    intervention_curie_dict = {}
-
-    for k, v in baseline_final_condition_dict.items():
-        condition_curie_dict[k] = "UMLS:{}".format(v[1])    
-    for k, v in baseline_final_intervention_dict.items():
-        intervention_curie_dict[k] = "UMLS:{}".format(v[1])
-
-    # print(intervention_curie_dict)
-
-    ct_final_mapped = ct_preprocessed.copy()
-    # print(ct_final_mapped[:10])
-    ct_final_mapped['subject'] = ct_preprocessed['subject_name'].map(condition_curie_dict)
-    ct_final_mapped['object'] = ct_preprocessed['object_name'].map(intervention_curie_dict)
-
-    ct_final_mapped = ct_final_mapped.dropna(subset=['subject','object'])
-    with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
-        print(ct_final_mapped.head(20))    
-    
-    # make dataframe for nodes file derived from edges dataframe (ct_final_mapped)
-    ct_nodes_subjects = ct_final_mapped[['subject', 'subject_name']]
-    ct_nodes_subjects.columns = ['id', 'name']
-    ct_nodes_subjects = ct_nodes_subjects.assign(category='biolink:DiseaseOrPhenotypicFeature')
-
-    ct_nodes_objects = ct_final_mapped[['object', 'object_name']]
-    ct_nodes_objects.columns = ['id', 'name']
-    ct_nodes_objects = ct_nodes_objects.assign(category='biolink:Treatment')
-
-    ct_nodes = pd.concat([ct_nodes_subjects, ct_nodes_objects], ignore_index=True, axis=0)
-    ct_nodes = ct_nodes.drop_duplicates('id')
-
-    # write nodes and edges files
-
-    ct_final_mapped.to_csv('ClinTrials_KG_edges_v01_subset.csv', sep ='\t', index=False)
-    ct_nodes.to_csv('ClinTrials_KG_nodes_v01_subset.csv', sep ='\t', index=False)
-
-
-
-    # print(baseline_final_intervention_dict)
-
-    # print(master_intervention_dict) 
-    # master_disease_dict = {disease[0]:disease[1:] for disease in final_metamapped_diseases if disease}  
-    # master_intervention_dict = {intervention[0]:intervention[1:] for intervention in final_metamapped_interventions if intervention}    
-
-
-
-
+    flag_and_path = {"term_program_flag": False, "data_extracted_path": "/15TB_2/gglusman/datasets/clinicaltrials/data/latest", "date_string": "latest"}
+    # flag_and_path = {"term_program_flag": False, "data_extracted_path": "/Users/Kamileh/Work/ISB/NCATS_BiomedicalTranslator/Projects/ClinicalTrials/ETL_Python/data/02_27_2024_extracted", "date_string": "02_27_2024"}
+    global metamap_dirs
+    metamap_dirs = check_os()
+    subset_size = None
+    df_dict = read_raw_ct_data(flag_and_path, subset_size) # read the clinical trial data
+    dict_new_terms = check_against_cache(df_dict) # use the existing cache of MetaMapped terms so that only new terms are mapped
+    term_list_to_mappers(dict_new_terms)
+    score_mappings()
+    output_terms_files()
 
     
-
-    
-
-    # print(metamapped_conditions)
-
-
-
-
-
-
-    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
-    #     print(ct_preprocessed.head(20))
-
-
-driver()
-
-
-
-#####	----	****	----	----	****	----	----	****	----    #####
-
-

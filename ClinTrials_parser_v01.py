@@ -1,3 +1,6 @@
+
+
+
 #!/usr/bin/env conda run -n ct_extract_env python
 
 import pandas as pd
@@ -44,6 +47,19 @@ def parse_edges(data_folder):
         association_dict["edge_attributes"].append(
         {"attribute_type_id": "biolink:aggregator_knowledge_source",
          "value": "infores:biothings-multiomics-clinicaltrials"})
+        
+        association_dict["edge_attributes"].append(
+            {
+                "attribute_type_id": "biolink:knowledge_type",
+                "value": "biolink:knowledge_assertion"
+            }
+        )
+        association_dict["edge_attributes"].append(
+            {
+                "attribute_type_id": "biolink:agent_type",
+                "value": "biolink:text_mining_agent"
+            }
+        )
 
         object_dict["{}".format(row["object"].split(':')[0])] = "{}".format(row["object"].split(':')[1])
         object_dict["name"] = row["object_name"]
@@ -87,4 +103,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

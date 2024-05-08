@@ -161,7 +161,8 @@ def read_raw_ct_data(flag_and_path, subset_size):
     return df_dict
 
 
-def cache_manually_selected_terms():    
+def cache_manually_selected_terms():
+    print("Caching manually selected terms")    
 
     def return_curie_dict(curie_info_delimited):
         keys = ["mapped_name", "mapped_curie", "mapped_score", "mapped_semtypes"]
@@ -208,7 +209,7 @@ def check_against_cache(df_dict):
     
     print("Are there new terms to map?")
     try:
-        cache_df = pd.read_csv("mapping_cache.tsv", sep ="\t", usecols = ['term_type', 'clintrial_term'], index_col=False, header=0, on_bad_lines = 'skip', encoding="utf-8", dtype=object)
+        cache_df = pd.read_csv("mapping_cache.tsv", sep ="\t", usecols = ['term_type', 'clintrial_term'], index_col=False, header=0, on_bad_lines = 'skip', encoding="utf-8", dtype="object")
     except:
         print("No cache of terms found. Proceeding to map entire KG from scratch")
 
@@ -541,7 +542,7 @@ def term_list_to_mappers(dict_new_terms):
     
     # """ Remove duplicate rows """
     mapping_filename = "mapping_cache.tsv"
-    cache = pd.read_csv(mapping_filename, sep='\t', index_col=False, header=0, encoding_errors='ignore', on_bad_lines='skip')
+    cache = pd.read_csv(mapping_filename, sep='\t', index_col=False, header=0, encoding_errors='ignore', on_bad_lines='skip', dtype="object")
     cache = cache.sort_values(by=['clintrial_term', 'score'], ascending=False).drop_duplicates(subset=['mapping_tool', 'term_type', 'clintrial_term', 'mapping_tool_response']).sort_index()
 
     # cache = cache.drop_duplicates()
@@ -553,6 +554,15 @@ def score_mappings():
 
     def get_max_score(str1, str2, old_score):
         
+        cancer_synonyms = ['carcinoma', 'sarcoma', 'melanoma', "malignancy", "neoplasm", "metastasis", "tumor"] # MetaMap tends to favor "neoplasm"...consider "liver cancer" and "liver neoplasm" as a good match that will fail the score threshold, so handling here
+        cancer_substring = any(word in str1 or word in str2 for word in cancer_synonyms)
+        if cancer_substring:
+            # Create a regex pattern to match any of the words in the list
+            pattern = r'\b(?:' + '|'.join(cancer_synonyms) + r')\b'
+            # Replace matched words with 'cancer' in both strings
+            str1 = re.sub(pattern, 'cancer', str1)
+            str2 = re.sub(pattern, 'cancer', str2)
+
         try:
             if old_score == "unscored":
                 sortratio_score = get_token_sort_ratio(str1, str2)
@@ -576,7 +586,7 @@ def score_mappings():
         write_header = True
         for chunk in reader:
             chunk["mapping_tool_response"] = chunk["mapping_tool_response"].apply(lambda x: wrap(x))
-            mapping_info = chunk["mapping_tool_response"].apply(pd.Series, dtype='object')
+            mapping_info = chunk["mapping_tool_response"].apply(pd.Series, dtype="object")
             chunk["mapped_name"] = mapping_info["mapped_name"]
             chunk["score"] = chunk.apply(lambda x: get_max_score(x['input_term'], x['mapped_name'], x['score']), axis=1) # get score for score rows that are empty/not scored yet
             chunk.drop(["mapped_name"], axis = 1, inplace = True)
@@ -588,7 +598,7 @@ def score_mappings():
 
     # """ Remove duplicate rows """
     mapping_filename = "mapping_cache.tsv"
-    cache = pd.read_csv(mapping_filename, sep='\t', index_col=False, header=0, encoding_errors='ignore', on_bad_lines='skip')
+    cache = pd.read_csv(mapping_filename, sep='\t', index_col=False, header=0, encoding_errors='ignore', on_bad_lines='skip', dtype="object")
     cache = cache.sort_values(by=['clintrial_term', 'score', 'term_type', 'mapping_tool'], ascending=False).drop_duplicates(subset=['mapping_tool', 'term_type', 'clintrial_term', 'mapping_tool_response']).sort_index()
 
     # cache = cache.drop_duplicates()
@@ -599,10 +609,9 @@ def output_terms_files():
     print("Generating output files")
 
     """   Get high scorers   """
-    cache = pd.read_csv("mapping_cache.tsv", sep='\t', index_col=False, header=0)
+    cache = pd.read_csv("mapping_cache.tsv", sep='\t', index_col=False, header=0, dtype="object")
     cache['score'] = pd.to_numeric(cache['score'], errors='coerce')
     highscorers = cache[cache['score'] >= 80] 
-    # test = highscorers.groupby('clintrial_term')
     idx = highscorers.groupby('clintrial_term')['score'].idxmax()  # group by the clinical trial term and get the highest scoring
     auto_selected = highscorers.loc[idx]
     auto_selected.to_csv(f'autoselected_terms.tsv', sep="\t", index=False, header=True) # output to TSV
@@ -612,7 +621,7 @@ def output_terms_files():
     manual_review = low_scorers[~low_scorers.clintrial_term.isin(highscorers['clintrial_term'].unique().tolist())] # there are terms autoselected that have mappings that didn't pass threshold too, but we want to consider that term mapped. So get rid of these rows too
     mapping_tool_response = manual_review['mapping_tool_response'].apply(lambda x: wrap(x))
     manual_review = manual_review.copy()
-    mapping_tool_response = mapping_tool_response.apply(pd.Series, dtype='object')
+    mapping_tool_response = mapping_tool_response.apply(pd.Series, dtype="object")
     manual_review.loc[:, 'mapping_tool_response_lists'] = mapping_tool_response.values.tolist()
     manual_review.drop('mapping_tool_response', axis=1, inplace=True)
     manual_review = manual_review[["mapping_tool", "term_type", "clintrial_term", "mapping_tool_response_lists", "input_term", "score"]]

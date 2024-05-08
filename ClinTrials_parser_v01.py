@@ -1,6 +1,3 @@
-
-
-
 #!/usr/bin/env conda run -n ct_extract_env python
 
 import pandas as pd
@@ -50,7 +47,7 @@ def parse_edges(data_folder):
         
         association_dict["edge_attributes"].append(
             {
-                "attribute_type_id": "biolink:knowledge_type",
+                "attribute_type_id": "biolink:knowledge_level",
                 "value": "biolink:knowledge_assertion"
             }
         )

@@ -1,8 +1,1 @@
-config.py
-outputs/
-scripts/
-data/
-protected/
-protected_copy/
-.ipynb_checkpoints
-.DS_Store
+/data
